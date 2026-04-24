@@ -6,6 +6,7 @@ import sqlite3
 import os
 import time
 import uuid
+import bcrypt
 from contextlib import contextmanager
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "oct_tutor.db")
@@ -39,6 +40,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 username TEXT UNIQUE NOT NULL,
+                password_hash TEXT,
                 created_at REAL NOT NULL
             );
 
@@ -65,14 +67,42 @@ def init_db():
             );
         """)
 
+        # Migration: add password_hash column if missing (for existing DBs)
+        columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        ]
+        if "password_hash" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+            print("[DB] Migrated users table: added password_hash column")
 
-def create_user(username: str) -> dict:
+
+# ------------------------------------------------------------------
+# Password Helpers
+# ------------------------------------------------------------------
+
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against its bcrypt hash."""
+    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+
+
+# ------------------------------------------------------------------
+# User Management
+# ------------------------------------------------------------------
+
+def create_user(username: str, password: str) -> dict:
+    """Create a new user with a hashed password."""
     user_id = str(uuid.uuid4())
     now = time.time()
+    pw_hash = hash_password(password)
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO users (id, username, created_at) VALUES (?, ?, ?)",
-            (user_id, username, now)
+            "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, username, pw_hash, now)
         )
     return {"id": user_id, "username": username, "created_at": now}
 
@@ -87,6 +117,30 @@ def get_user_by_username(username: str) -> dict | None:
     return None
 
 
+def get_user_by_id(user_id: str) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row:
+            return dict(row)
+    return None
+
+
+def set_user_password(user_id: str, password: str):
+    """Set/update the password for an existing user (migration helper)."""
+    pw_hash = hash_password(password)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (pw_hash, user_id)
+        )
+
+
+# ------------------------------------------------------------------
+# Session Management
+# ------------------------------------------------------------------
+
 def create_session(user_id: str) -> dict:
     session_id = str(uuid.uuid4())
     now = time.time()
@@ -97,6 +151,10 @@ def create_session(user_id: str) -> dict:
         )
     return {"id": session_id, "user_id": user_id, "started_at": now}
 
+
+# ------------------------------------------------------------------
+# Attempt Tracking
+# ------------------------------------------------------------------
 
 def record_attempt(session_id: str, user_id: str, image_id: str,
                    true_class: str, ai_prediction: str, ai_confidence: float,

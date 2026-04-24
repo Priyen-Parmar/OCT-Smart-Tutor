@@ -3,13 +3,29 @@
  */
 const API_BASE = '/api';
 
-export async function login(username) {
+export async function register(username, password) {
+    const res = await fetch(`${API_BASE}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+        const status = res.status;
+        throw new Error(`Register failed: ${status}`);
+    }
+    return res.json();
+}
+
+export async function login(username, password) {
     const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username }),
+        body: JSON.stringify({ username, password }),
     });
-    if (!res.ok) throw new Error('Login failed');
+    if (!res.ok) {
+        const status = res.status;
+        throw new Error(`Login failed: ${status}`);
+    }
     return res.json();
 }
 

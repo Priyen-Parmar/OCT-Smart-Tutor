@@ -1,0 +1,146 @@
+Here is the complete, production-ready method. This approach uses best practices: it secures your credentials using a `.env` file (so you never accidentally leak them), loads them directly into the environment, and streams the images without filling up your hard drive.
+
+### Step 1: Set Up Your Project Folder
+Create a new folder for your backend project and navigate into it using your terminal.
+
+```bash
+mkdir oct-image-api
+cd oct-image-api
+```
+
+### Step 2: Install Dependencies
+You need FastAPI to run the server, the Kaggle API to fetch the images, and `python-dotenv` to safely load your credentials.
+
+```bash
+pip install fastapi uvicorn kaggle python-dotenv
+```
+
+### Step 3: Create Your `.env` File (For Credentials)
+Create a file named **exactly** `.env` in your project folder. Paste your Kaggle token details into it. **Do not put quotes around the values.**
+
+```text
+KAGGLE_USERNAME=your_actual_username_here
+KAGGLE_KEY=your_actual_long_alphanumeric_key_here
+```
+*(If you are using Git, make sure to add `.env` to your `.gitignore` file so you don't upload your password to GitHub).*
+
+### Step 4: The Complete Backend Code (`main.py`)
+Create a file named `main.py` in the same folder and paste this exact code. 
+
+Notice that we load the `.env` file **before** importing the Kaggle API. This is the crucial step that makes the direct-token method work.
+
+```python
+import os
+import random
+import tempfile
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.background import BackgroundTasks
+from dotenv import load_dotenv
+
+# 1. LOAD CREDENTIALS FIRST
+# This reads your .env file and injects the keys into the environment.
+load_dotenv()
+
+# Safety check to ensure you set up the .env file correctly
+if not os.environ.get("KAGGLE_USERNAME") or not os.environ.get("KAGGLE_KEY"):
+    raise RuntimeError("Missing Kaggle credentials! Please check your .env file.")
+
+# 2. NOW IMPORT KAGGLE
+# It will automatically find the credentials we just loaded.
+from kaggle.api.kaggle_api_extended import KaggleApi
+
+app = FastAPI()
+
+# Initialize and authenticate the Kaggle API
+api = KaggleApi()
+api.authenticate()
+
+DATASET_NAME = "anirudhcv/labeled-optical-coherence-tomography-oct"
+FILE_LIST_CACHE = {}
+
+def cleanup_temp_file(path: str):
+    """Deletes the temporary image file after it has been streamed to the user."""
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception as e:
+            print(f"Failed to delete temp file {path}: {e}")
+
+@app.get("/image/{split}/{condition}")
+async def get_oct_image(split: str, condition: str, background_tasks: BackgroundTasks):
+    """
+    Endpoint to stream a specific OCT image.
+    Example: http://localhost:8000/image/val/DRUSEN
+    """
+    valid_splits = ["train", "val", "test"]
+    valid_conditions = ["CNV", "DME", "DRUSEN", "NORMAL"]
+    
+    if split not in valid_splits or condition.upper() not in valid_conditions:
+        raise HTTPException(status_code=400, detail="Invalid split or condition requested.")
+
+    condition = condition.upper()
+    cache_key = f"{split}_{condition}"
+
+    # 3. CACHE THE FILE LIST
+    # This prevents the API from searching through 80,000+ files every single request
+    if cache_key not in FILE_LIST_CACHE:
+        try:
+            print(f"Fetching file list for {split}/{condition} (This takes a few seconds the first time)...")
+            all_files = api.dataset_list_files(DATASET_NAME).files
+            
+            # Match the exact path structure from your Kaggle screenshot
+            prefix = f"Dataset - train+val+test/{split}/{condition}/"
+            
+            FILE_LIST_CACHE[cache_key] = [
+                str(f) for f in all_files 
+                if str(f).startswith(prefix) and str(f).lower().endswith(('.jpeg', '.jpg', '.png'))
+            ]
+            print(f"Found {len(FILE_LIST_CACHE[cache_key])} images.")
+        except Exception as e:
+             raise HTTPException(status_code=500, detail=f"Failed to fetch file list from Kaggle: {str(e)}")
+
+    if not FILE_LIST_CACHE[cache_key]:
+        raise HTTPException(status_code=404, detail="No images found for this category.")
+
+    # 4. PICK A RANDOM IMAGE
+    selected_file_path = random.choice(FILE_LIST_CACHE[cache_key])
+    
+    # 5. DOWNLOAD AND STREAM
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        # Download the specific file to our temporary folder
+        api.dataset_download_file(DATASET_NAME, selected_file_path, path=temp_dir)
+        
+        filename = os.path.basename(selected_file_path)
+        downloaded_file_path = os.path.join(temp_dir, filename)
+
+        # Tell FastAPI to delete the file AFTER the user finishes downloading it
+        background_tasks.add_task(cleanup_temp_file, downloaded_file_path)
+
+        # Stream it back to the browser
+        return FileResponse(downloaded_file_path, media_type="image/jpeg")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing image stream: {str(e)}")
+```
+
+### Step 5: Run the API
+Start your server from the terminal:
+```bash
+uvicorn main:app --reload
+```
+
+### Step 6: Use It in Your Website
+Your backend is now running locally on port 8000. You can put these URLs directly into your frontend code (HTML, React, Vue, etc.) just like any normal image link.
+
+To get a random image from the `val` folder for `DRUSEN`, use:
+```html
+<img src="http://localhost:8000/image/val/DRUSEN" alt="DRUSEN Scan" />
+```
+
+To get a random image from the `train` folder for `NORMAL`, use:
+```html
+<img src="http://localhost:8000/image/train/NORMAL" alt="Normal Scan" />
+```
