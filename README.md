@@ -70,21 +70,9 @@ The application uses Vite for the frontend. For a production-ready setup, the fr
    npm run build
    ```
 
-## 2. Running the Application (Production Mode)
 
-Once the frontend is built (`npm run build`), the FastAPI backend will automatically serve both the API and the static React files.
 
-1. Navigate to the `backend` directory.
-2. Start the FastAPI server:
-   ```bash
-   python main.py
-   ```
-3. Open your browser and go to:
-   **http://localhost:8000**
-
-You will see the fully functional frontend, and all API calls will be routed seamlessly.
-
-## 3. Development Mode
+## 2. Running the Application
 
 If you wish to run the app in development mode with Hot Module Replacement (HMR) for the frontend:
 
