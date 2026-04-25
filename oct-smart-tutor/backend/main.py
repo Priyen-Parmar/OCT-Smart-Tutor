@@ -11,8 +11,9 @@ from io import BytesIO
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.background import BackgroundTasks
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Conditional TensorFlow import — fall back to simulation if not available
@@ -39,7 +40,7 @@ import kaggle_service
 # ------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------
-MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "UGP-seond-try-model.keras")
+MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "UGP-final-model.keras")
 IMG_HEIGHT, IMG_WIDTH = 224, 224
 
 # ------------------------------------------------------------------
@@ -402,6 +403,22 @@ async def predict_scan(file: UploadFile = File(...)):
     confidence = float(np.max(predictions[0]))
 
     return {"diagnosis": predicted_class, "confidence": confidence}
+
+
+# ------------------------------------------------------------------
+# Frontend Static Files (Production)
+# ------------------------------------------------------------------
+frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+if os.path.exists(frontend_dist):
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
+    
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        index_path = os.path.join(frontend_dist, "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "r") as f:
+                return HTMLResponse(content=f.read(), status_code=200)
+        return {"error": "Frontend build not found"}
 
 
 if __name__ == "__main__":
