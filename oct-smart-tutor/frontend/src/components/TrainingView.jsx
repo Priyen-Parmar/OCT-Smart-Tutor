@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { getNextCase, submitDiagnosis, getStats } from '../api/client'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { getNextCase, submitDiagnosis, getStats, getBufferStatus } from '../api/client'
 import MasteryRadar from './MasteryRadar'
 import DiagnosticViewer from './DiagnosticViewer'
 import DecisionEngine from './DecisionEngine'
@@ -10,6 +10,40 @@ export default function TrainingView({ userId, sessionId, username, onLogout }) 
     const [stats, setStats] = useState(null)
     const [loading, setLoading] = useState(false)
     const [caseNumber, setCaseNumber] = useState(0)
+    const [error, setError] = useState(null)
+    const [bufferStatus, setBufferStatus] = useState(null)
+
+    // Poll buffer status until ready
+    const bufferPollRef = useRef(null)
+
+    useEffect(() => {
+        const pollBuffer = async () => {
+            try {
+                const status = await getBufferStatus()
+                setBufferStatus(status)
+                if (status.ready && status.total_available > 0) {
+                    // Buffer is ready, stop polling
+                    if (bufferPollRef.current) {
+                        clearInterval(bufferPollRef.current)
+                        bufferPollRef.current = null
+                    }
+                }
+            } catch (err) {
+                console.error('Buffer status poll failed:', err)
+            }
+        }
+
+        // Initial check
+        pollBuffer()
+        // Poll every 3 seconds
+        bufferPollRef.current = setInterval(pollBuffer, 3000)
+
+        return () => {
+            if (bufferPollRef.current) {
+                clearInterval(bufferPollRef.current)
+            }
+        }
+    }, [])
 
     const refreshStats = useCallback(async () => {
         try {
@@ -25,12 +59,14 @@ export default function TrainingView({ userId, sessionId, username, onLogout }) 
     const loadNextCase = useCallback(async () => {
         setLoading(true)
         setResult(null)
+        setError(null)
         try {
             const data = await getNextCase(userId, sessionId)
             setCurrentCase(data)
             setCaseNumber(n => n + 1)
         } catch (err) {
             console.error('Failed to load case:', err)
+            setError('Failed to load the next case. The image buffer may still be downloading.')
         } finally {
             setLoading(false)
         }
@@ -50,6 +86,7 @@ export default function TrainingView({ userId, sessionId, username, onLogout }) 
             await refreshStats()
         } catch (err) {
             console.error('Failed to submit diagnosis:', err)
+            setError('Failed to submit your diagnosis. Please try again.')
         } finally {
             setLoading(false)
         }
@@ -58,6 +95,10 @@ export default function TrainingView({ userId, sessionId, username, onLogout }) 
     const totalAttempts = stats?.total_attempts || 0
     const overallAccuracy = stats?.overall_accuracy || 0
     const initial = (username || '?')[0].toUpperCase()
+
+    // Compute buffer readiness info
+    const bufferReady = bufferStatus?.ready && bufferStatus?.total_available > 0
+    const hasAnyImages = bufferStatus?.total_available > 0
 
     return (
         <div className="training-view">
@@ -96,6 +137,11 @@ export default function TrainingView({ userId, sessionId, username, onLogout }) 
                     imageUrl={currentCase?.image_url}
                     loading={loading && !currentCase}
                     onStartTraining={loadNextCase}
+                    error={error}
+                    onRetry={loadNextCase}
+                    bufferStatus={bufferStatus}
+                    bufferReady={bufferReady}
+                    hasAnyImages={hasAnyImages}
                 />
 
                 <DecisionEngine

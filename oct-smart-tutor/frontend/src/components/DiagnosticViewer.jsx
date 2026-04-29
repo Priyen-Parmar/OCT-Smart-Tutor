@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
-export default function DiagnosticViewer({ imageUrl, loading, onStartTraining }) {
+export default function DiagnosticViewer({ imageUrl, loading, onStartTraining, error, onRetry, bufferStatus, bufferReady, hasAnyImages }) {
     const [zoom, setZoom] = useState(1)
     const [offset, setOffset] = useState({ x: 0, y: 0 })
     const [dragging, setDragging] = useState(false)
@@ -79,7 +79,26 @@ export default function DiagnosticViewer({ imageUrl, loading, onStartTraining })
     }
     const handleMouseUp = () => setDragging(false)
 
+    // Compute buffer progress for the loading screen
+    const getBufferProgress = () => {
+        if (!bufferStatus?.classes) return null
+        const classes = bufferStatus.classes
+        const classNames = Object.keys(classes)
+        const totalTarget = classNames.reduce((sum, c) => sum + classes[c].target, 0)
+        const totalCached = classNames.reduce((sum, c) => sum + classes[c].cached, 0)
+        return {
+            percent: totalTarget > 0 ? Math.round((totalCached / totalTarget) * 100) : 0,
+            details: classNames.map(c => ({
+                name: c,
+                cached: classes[c].cached,
+                target: classes[c].target,
+            })),
+        }
+    }
+
     if (!imageUrl) {
+        const progress = getBufferProgress()
+
         return (
             <div className="center-panel">
                 <div className="viewer-container">
@@ -91,19 +110,74 @@ export default function DiagnosticViewer({ imageUrl, loading, onStartTraining })
                                 <polyline points="21 15 16 10 5 21"/>
                             </svg>
                         </div>
-                        {loading ? (
+
+                        {/* Error state */}
+                        {error && (
+                            <div className="buffer-error">
+                                <p className="buffer-error-text">{error}</p>
+                                <button className="next-case-btn" onClick={onRetry} style={{ marginTop: 8 }}>
+                                    Retry
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Loading state */}
+                        {loading && !error && (
                             <div className="loading-container" style={{ height: 'auto' }}>
                                 <div className="loading-spinner" />
-                                <span className="loading-text">Fetching image from Kaggle...</span>
+                                <span className="loading-text">Loading next case...</span>
                             </div>
-                        ) : (
+                        )}
+
+                        {/* Buffer not ready yet — show download progress */}
+                        {!loading && !error && !hasAnyImages && progress && (
+                            <div className="buffer-progress-container">
+                                <div className="loading-spinner" />
+                                <p className="viewer-empty-text">Preparing your image library...</p>
+                                <p className="viewer-empty-sub">
+                                    Downloading OCT scans from Kaggle ({progress.percent}%)
+                                </p>
+                                <div className="buffer-progress-bar">
+                                    <div
+                                        className="buffer-progress-fill"
+                                        style={{ width: `${progress.percent}%` }}
+                                    />
+                                </div>
+                                <div className="buffer-class-grid">
+                                    {progress.details.map(d => (
+                                        <div key={d.name} className="buffer-class-item">
+                                            <span className="buffer-class-name">{d.name}</span>
+                                            <span className="buffer-class-count">
+                                                {d.cached}/{d.target}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Ready to start */}
+                        {!loading && !error && hasAnyImages && (
                             <>
                                 <p className="viewer-empty-text">Ready to begin your training session</p>
                                 <p className="viewer-empty-sub">Click below to load your first OCT scan</p>
+                                {!bufferReady && progress && (
+                                    <p className="viewer-empty-sub" style={{ color: '#00d4aa', fontSize: '0.75rem' }}>
+                                        ⏳ Still downloading more images ({progress.percent}%) — you can start now
+                                    </p>
+                                )}
                                 <button className="next-case-btn" onClick={onStartTraining} style={{ marginTop: 12 }}>
                                     Start Training
                                 </button>
                             </>
+                        )}
+
+                        {/* No buffer info yet (first load) */}
+                        {!loading && !error && !hasAnyImages && !progress && (
+                            <div className="loading-container" style={{ height: 'auto' }}>
+                                <div className="loading-spinner" />
+                                <span className="loading-text">Connecting to server...</span>
+                            </div>
                         )}
                     </div>
                 </div>

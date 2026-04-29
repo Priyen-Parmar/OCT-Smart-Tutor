@@ -55,3 +55,9 @@ export async function getStats(userId) {
     if (!res.ok) throw new Error('Failed to get stats');
     return res.json();
 }
+
+export async function getBufferStatus() {
+    const res = await fetch(`${API_BASE}/buffer-status`);
+    if (!res.ok) throw new Error('Failed to get buffer status');
+    return res.json();
+}

@@ -3,16 +3,16 @@ OCT Smart Tutor — FastAPI Backend
 
 Serves the AI-driven OCT classification model and manages the adaptive
 training curriculum using the Fair UCB algorithm.
-Images are streamed from the Kaggle OCT dataset on demand.
+Images are pre-downloaded into a local buffer from the Kaggle OCT dataset.
 """
 import os
 import numpy as np
 from io import BytesIO
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.background import BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -42,19 +42,6 @@ import kaggle_service
 # ------------------------------------------------------------------
 MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "UGP-final-model.keras")
 IMG_HEIGHT, IMG_WIDTH = 224, 224
-
-# ------------------------------------------------------------------
-# App Setup
-# ------------------------------------------------------------------
-app = FastAPI(title="OCT Smart Tutor API", version="2.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ------------------------------------------------------------------
 # Global State
@@ -103,18 +90,34 @@ def predict_image(image_path: str) -> tuple[str, float]:
 
 
 # ------------------------------------------------------------------
-# Startup Event
+# Lifespan (replaces deprecated on_event)
 # ------------------------------------------------------------------
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown logic."""
+    # --- Startup ---
     init_db()
     load_model()
-    # Pre-load Kaggle file lists in background (non-blocking for startup)
-    try:
-        kaggle_service.preload_file_lists()
-    except Exception as e:
-        print(f"WARNING: Kaggle pre-load failed: {e}")
-        print("Images will be fetched on first request.")
+    # Start background image buffer download (non-blocking)
+    kaggle_service.start_buffer_prefill()
+    print("Server is ready — image buffer is downloading in the background.")
+    yield
+    # --- Shutdown ---
+    print("Shutting down...")
+
+
+# ------------------------------------------------------------------
+# App Setup
+# ------------------------------------------------------------------
+app = FastAPI(title="OCT Smart Tutor API", version="2.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ------------------------------------------------------------------
@@ -217,11 +220,27 @@ async def login(req: LoginRequest):
 
 
 # ------------------------------------------------------------------
+# API Endpoints — Buffer Status
+# ------------------------------------------------------------------
+@app.get("/api/buffer-status")
+async def buffer_status():
+    """Get the current image buffer download status."""
+    return kaggle_service.get_buffer_status()
+
+
+# ------------------------------------------------------------------
 # API Endpoints — Training
 # ------------------------------------------------------------------
 @app.get("/api/next-case/{user_id}/{session_id}", response_model=NextCaseResponse)
 async def get_next_case(user_id: str, session_id: str):
-    """Use Fair UCB to select the next OCT case, fetched from Kaggle."""
+    """Use Fair UCB to select the next OCT case from the local image buffer."""
+    # Check if we have any images at all
+    if not kaggle_service.has_any_images():
+        raise HTTPException(
+            503,
+            "Image buffer is still downloading. Please wait a moment and try again."
+        )
+
     stats = get_user_stats(user_id)
 
     # Fair UCB selects which class to focus on
@@ -233,53 +252,43 @@ async def get_next_case(user_id: str, session_id: str):
     for h in history:
         decoded = kaggle_service.decode_image_id(h["image_id"])
         if decoded:
-            recent_filenames.append(decoded[2])  # filename
+            recent_filenames.append(decoded[1])  # filename
 
-    # Try all available splits to find images for the selected class
-    SPLITS_TO_TRY = ["test", "train", "val"]
-    result = None
-    used_split = None
+    # Try to get an image from the selected class
+    result = kaggle_service.get_random_image_path(
+        selected_cls, exclude_filenames=recent_filenames
+    )
 
-    for split in SPLITS_TO_TRY:
-        result = kaggle_service.get_random_image_path(
-            split, selected_cls, exclude_filenames=recent_filenames
-        )
-        if result is not None:
-            used_split = split
-            break
-
+    # If selected class has no images, try other classes
     if result is None:
-        # Try other classes across all splits
         for cls in CLASS_NAMES:
             if cls != selected_cls:
-                for split in SPLITS_TO_TRY:
-                    result = kaggle_service.get_random_image_path(
-                        split, cls, exclude_filenames=recent_filenames
-                    )
-                    if result is not None:
-                        selected_cls = cls
-                        used_split = split
-                        break
+                result = kaggle_service.get_random_image_path(
+                    cls, exclude_filenames=recent_filenames
+                )
                 if result is not None:
+                    selected_cls = cls
                     break
 
     if result is None:
-        raise HTTPException(503, "Failed to fetch images from Kaggle. Please check your connection and credentials.")
+        raise HTTPException(
+            503,
+            "No images available yet. The buffer is still downloading."
+        )
 
-    local_path, kaggle_path = result
-    filename = os.path.basename(kaggle_path)
-    image_id = kaggle_service.encode_image_id(used_split, selected_cls, filename)
+    local_path, condition = result
+    filename = os.path.basename(local_path)
+    image_id = kaggle_service.encode_image_id(condition, filename)
 
-    # Run prediction on the downloaded image
+    # Run prediction on the local image
     ai_prediction, ai_confidence = predict_image(local_path)
 
-    # Store prediction data in a temp cache for the submit endpoint
+    # Store prediction data in the cache for the submit endpoint
     _prediction_cache[image_id] = {
         "local_path": local_path,
-        "true_class": selected_cls,
+        "true_class": condition,
         "ai_prediction": ai_prediction,
         "ai_confidence": ai_confidence,
-        "kaggle_path": kaggle_path,
     }
 
     return NextCaseResponse(
@@ -303,7 +312,7 @@ async def submit_diagnosis(req: DiagnosisRequest):
         if not decoded:
             raise HTTPException(404, "Image not found")
 
-        split, condition, filename = decoded
+        condition, filename = decoded
         # Use condition as ground truth class
         confidence = round(0.90 + np.random.random() * 0.09, 4)
         cached = {
@@ -326,11 +335,8 @@ async def submit_diagnosis(req: DiagnosisRequest):
         is_correct=is_correct,
     )
 
-    # Clean up cached prediction and temp file
+    # Clean up prediction cache entry (image stays in persistent cache)
     if req.image_id in _prediction_cache:
-        local_path = _prediction_cache[req.image_id].get("local_path")
-        if local_path:
-            kaggle_service.cleanup_temp_file(local_path)
         del _prediction_cache[req.image_id]
 
     return DiagnosisResponse(
@@ -343,27 +349,23 @@ async def submit_diagnosis(req: DiagnosisRequest):
 
 
 @app.get("/api/images/{image_id}")
-async def get_image(image_id: str, background_tasks: BackgroundTasks):
-    """Serve an OCT image by its ID."""
-    # Check prediction cache first (image already downloaded)
+async def get_image(image_id: str):
+    """Serve an OCT image from the local cache."""
+    # Check prediction cache first
     cached = _prediction_cache.get(image_id)
     if cached and cached.get("local_path") and os.path.exists(cached["local_path"]):
         return FileResponse(cached["local_path"], media_type="image/jpeg")
 
-    # Otherwise, download from Kaggle
+    # Try to find in persistent cache
     decoded = kaggle_service.decode_image_id(image_id)
     if not decoded:
         raise HTTPException(404, "Invalid image ID")
 
-    split, condition, filename = decoded
-    kaggle_path = f"Dataset - train+val+test/{split}/{condition}/{filename}"
-    local_path = kaggle_service.get_specific_image_path(kaggle_path)
+    condition, filename = decoded
+    local_path = kaggle_service.get_specific_image_path(condition, filename)
 
     if not local_path:
-        raise HTTPException(503, "Failed to download image from Kaggle")
-
-    # Schedule cleanup after response is sent
-    background_tasks.add_task(kaggle_service.cleanup_temp_file, local_path)
+        raise HTTPException(404, "Image not found in cache")
 
     return FileResponse(local_path, media_type="image/jpeg")
 

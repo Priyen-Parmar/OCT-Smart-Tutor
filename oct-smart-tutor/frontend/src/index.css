@@ -500,3 +500,68 @@ body {
   align-items: center; justify-content: center; gap: 16px;
 }
 .start-training-container .next-case-btn { font-size: 16px; padding: 16px 40px; }
+
+/* Buffer Progress UI */
+.buffer-progress-container {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 12px;
+  animation: fadeIn 0.5s ease;
+}
+
+.buffer-progress-bar {
+  width: 280px; height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px; overflow: hidden;
+  border: 1px solid var(--border-glass);
+}
+
+.buffer-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal-dark), var(--teal-primary), var(--teal-secondary));
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.buffer-class-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 6px; margin-top: 4px;
+}
+
+.buffer-class-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 14px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  min-width: 120px;
+}
+
+.buffer-class-name {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-secondary);
+}
+
+.buffer-class-count {
+  font-size: 11px; font-weight: 600;
+  color: var(--teal-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Error state */
+.buffer-error {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 8px;
+  animation: fadeIn 0.4s ease;
+}
+
+.buffer-error-text {
+  font-size: 13px; color: var(--color-incorrect);
+  text-align: center; line-height: 1.5;
+  padding: 12px 20px;
+  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid rgba(255, 107, 107, 0.2);
+  border-radius: var(--radius-sm);
+}

@@ -17,6 +17,7 @@ env/
 backend/oct_tutor.db
 backend/sample_images/
 backend/temp/
+backend/image_cache/
 
 # Node / Frontend
 node_modules/
